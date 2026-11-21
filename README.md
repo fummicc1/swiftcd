@@ -1,0 +1,85 @@
+# SwiftCD
+
+Swiftで作る、ローカルで完結するミニArgoCDです。Gitリポジトリのマニフェストを、kindで立てたローカルのKubernetesへ同期します。
+
+## 仕組み
+
+```
+Application定義 (examples/apps/*.yaml)
+        │
+        ▼
+AppController (アプリごとのactor, 既定30秒ごと)
+  1. git clone / fetch → targetRevisionをcheckout      … GitClient
+  2. YAMLを読み、管理ラベルを付けてList(JSON)にまとめる … ManifestRenderer
+  3. kubectl diff --server-side で差分を検出           … ClusterClient
+  4. automated かつ未Syncのリビジョンなら kubectl apply --server-side
+  5. ライブの状態からHealthを判定                       … HealthAssessor
+        │
+        ▼
+AppStore ── HTTP API (Hummingbird) ── Web UI / swiftcd CLI
+```
+
+| ArgoCDの概念 | SwiftCDでの実装 |
+|---|---|
+| Application CRD | `examples/apps/*.yaml` |
+| repo-server | `ManifestRenderer`（プレーンなYAMLだけ対応） |
+| application-controller | `AppController` |
+| Sync Status | `kubectl diff` の終了コード（0=Synced、1=OutOfSync） |
+| Health Status | `HealthAssessor`（Deployment / StatefulSet / ReplicaSet / Pod） |
+| 管理対象の識別 | ラベル `swiftcd.io/app=<name>` |
+
+自動Syncは、ArgoCDと同じく「まだSyncしていないリビジョン」だけが対象です。`kubectl scale` などの手動変更はOutOfSyncと表示しますが、元には戻しません（self-healは未対応）。
+
+## 必要なもの
+
+- Xcodeに入っているSwift 6.x（`.swift-version` でswiftlyに `xcode` を指定しています）
+- Docker（Docker Desktopなど）が起動していること
+- `kind`、`kubectl`、`git`
+
+## 使い方
+
+```bash
+# 1. kindクラスタ "swiftcd" とデモ用Gitリポジトリ（~/.swiftcd/demo-repo）を作る
+./scripts/setup-kind.sh
+./scripts/init-demo-repo.sh
+
+# 2. サーバーを起動する（既定で kubectl context は kind-swiftcd）
+swift run swiftcd-server --apps examples/apps
+# → http://127.0.0.1:8080 をブラウザで開く
+
+# 3. 別のターミナルでCLIから操作する
+swift run swiftcd app list
+swift run swiftcd app get guestbook
+swift run swiftcd app sync guestbook-staging
+
+# 4. Gitを変更して、自動で同期されるのを見る
+cd ~/.swiftcd/demo-repo
+perl -pi -e 's/replicas: 1/replicas: 3/' guestbook/deployment.yaml
+git commit -am "scale to 3"
+```
+
+`guestbook` は自動Sync、`guestbook-staging` は手動Sync（UIのSyncボタンかCLIで同期）の例です。
+
+サーバーのオプションは `swift run swiftcd-server --help` で確認できます（`--interval`、`--port`、`--context`、`--work-dir`）。
+
+## テスト
+
+```bash
+swift test          # 単体テスト（Fakeを使うのでクラスタは不要）
+./scripts/e2e.sh    # kindでのE2E（初回同期 → 自動同期 → ドリフト検出 → 手動Sync）
+```
+
+## API
+
+| メソッド | パス | 内容 |
+|---|---|---|
+| GET | `/api/apps` | 全アプリの状態 |
+| GET | `/api/apps/:name` | 1つのアプリの状態 |
+| POST | `/api/apps/:name/refresh` | Gitとクラスタを再比較する |
+| POST | `/api/apps/:name/sync` | 同期する |
+
+## 未対応（今後の候補）
+
+- self-heal、prune（Gitから消えたリソースの削除。`swiftcd.io/app` ラベルで対象を探せる）
+- Git webhook、Kustomize / Helm のレンダリング
+- kubectlを使わないREST版の `ClusterClient`、Application CRD化

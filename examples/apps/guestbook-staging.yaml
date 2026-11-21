@@ -1,0 +1,9 @@
+name: guestbook-staging
+source:
+  repoURL: ~/.swiftcd/demo-repo
+  path: guestbook
+  targetRevision: main
+destination:
+  namespace: guestbook-staging
+syncPolicy:
+  automated: false

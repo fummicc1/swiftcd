@@ -1,0 +1,9 @@
+name: guestbook
+source:
+  repoURL: ~/.swiftcd/demo-repo
+  path: guestbook
+  targetRevision: main
+destination:
+  namespace: guestbook
+syncPolicy:
+  automated: true

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SwiftCD</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1f2328; --muted: #656d76; --border: #d8dee4;
+    --green: #1a7f37; --yellow: #9a6700; --red: #cf222e; --blue: #0969da; --gray: #6e7781;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --card: #161b22; --text: #e6edf3; --muted: #8d96a0; --border: #30363d;
+      --green: #3fb950; --yellow: #d29922; --red: #f85149; --blue: #4493f8; --gray: #8d96a0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--card); }
+  header h1 { margin: 0; font-size: 18px; }
+  header span { color: var(--muted); font-size: 12px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .top h2 { margin: 0; font-size: 16px; flex: 1 1 auto; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid currentColor; }
+  .Synced, .Healthy { color: var(--green); }
+  .OutOfSync, .Progressing { color: var(--yellow); }
+  .Degraded, .Missing { color: var(--red); }
+  .Unknown, .Idle { color: var(--gray); }
+  .Syncing, .Refreshing { color: var(--blue); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 12px 0; color: var(--muted); }
+  dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .error { color: var(--red); white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 12px; margin: 8px 0; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.msg { white-space: normal; color: var(--muted); }
+  button { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; padding: 4px 12px; cursor: pointer; font: inherit; }
+  button:hover { border-color: var(--blue); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .empty { color: var(--muted); text-align: center; padding: 32px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SwiftCD</h1>
+  <span id="updated">loading…</span>
+</header>
+<main id="apps"><div class="empty">loading…</div></main>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const badge = (v) => `<span class="badge ${esc(v)}">${esc(v)}</span>`;
+const time = (t) => (t ? new Date(t).toLocaleTimeString() : "-");
+const busy = new Set();
+
+function render(apps) {
+  const root = document.getElementById("apps");
+  if (apps.length === 0) {
+    root.innerHTML = '<div class="empty">Applicationがありません</div>';
+    return;
+  }
+  root.innerHTML = apps.map((a) => `
+    <section class="card">
+      <div class="top">
+        <h2>${esc(a.name)}</h2>
+        ${badge(a.sync)} ${badge(a.health)} ${a.phase !== "Idle" ? badge(a.phase) : ""}
+        <button data-action="refresh" data-name="${esc(a.name)}" ${busy.has(a.name) ? "disabled" : ""}>Refresh</button>
+        <button data-action="sync" data-name="${esc(a.name)}" ${busy.has(a.name) ? "disabled" : ""}>Sync</button>
+      </div>
+      <dl>
+        <dt>Repo</dt><dd><code>${esc(a.source.repoURL)}</code> / <code>${esc(a.source.path)}</code> @ <code>${esc(a.source.targetRevision)}</code></dd>
+        <dt>Revision</dt><dd><code>${esc((a.revision ?? "-").slice(0, 7))}</code> ${esc(a.revisionMessage ?? "")}</dd>
+        <dt>Namespace</dt><dd>${esc(a.destination.namespace)}</dd>
+        <dt>Auto Sync</dt><dd>${a.automated ? "有効" : "無効"}</dd>
+        <dt>Last Sync</dt><dd>${time(a.lastSyncedAt)} <code>${esc((a.lastSyncedRevision ?? "").slice(0, 7))}</code></dd>
+        <dt>Reconciled</dt><dd>${time(a.lastReconciledAt)}</dd>
+      </dl>
+      ${a.error ? `<div class="error">${esc(a.error)}</div>` : ""}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Kind</th><th>Name</th><th>Sync</th><th>Health</th><th>Message</th></tr></thead>
+          <tbody>
+            ${a.resources.map((r) => `
+              <tr>
+                <td>${esc(r.ref.group ? r.ref.group + "/" : "")}${esc(r.ref.kind)}</td>
+                <td>${esc(r.ref.name)}</td>
+                <td>${badge(r.sync)}</td>
+                <td>${badge(r.health)}</td>
+                <td class="msg">${esc(r.message ?? "")}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>`).join("");
+}
+
+async function load() {
+  try {
+    const res = await fetch("/api/apps");
+    render(await res.json());
+    document.getElementById("updated").textContent = `updated ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    document.getElementById("updated").textContent = `サーバーに接続できません: ${e}`;
+  }
+}
+
+document.addEventListener("click", async (e) => {
+  const button = e.target.closest("button[data-action]");
+  if (!button) return;
+  const { action, name } = button.dataset;
+  busy.add(name);
+  await load();
+  try {
+    await fetch(`/api/apps/${encodeURIComponent(name)}/${action}`, { method: "POST" });
+  } finally {
+    busy.delete(name);
+    await load();
+  }
+});
+
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>
