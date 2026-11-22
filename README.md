@@ -39,9 +39,8 @@ AppStore ── HTTP API (Hummingbird) ── Web UI / swiftcd CLI
 ## 使い方
 
 ```bash
-# 1. kindクラスタ "swiftcd" とデモ用Gitリポジトリ（~/.swiftcd/demo-repo）を作る
+# 1. kindクラスタ "swiftcd" を作る
 ./scripts/setup-kind.sh
-./scripts/init-demo-repo.sh
 
 # 2. サーバーを起動する（既定で kubectl context は kind-swiftcd）
 swift run swiftcd-server --apps examples/apps
@@ -52,13 +51,15 @@ swift run swiftcd app list
 swift run swiftcd app get guestbook
 swift run swiftcd app sync guestbook-staging
 
-# 4. Gitを変更して、自動で同期されるのを見る
-cd ~/.swiftcd/demo-repo
+# 4. マニフェストのリポジトリを変更してpushし、自動で同期されるのを見る
+cd ../swiftcd-demo-manifests
 perl -pi -e 's/replicas: 1/replicas: 3/' guestbook/deployment.yaml
-git commit -am "scale to 3"
+git commit -am "scale to 3" && git push
 ```
 
-`guestbook` は自動Sync、`guestbook-staging` は手動Sync（UIのSyncボタンかCLIで同期）の例です。
+`examples/apps/*.yaml` は GitHub の公開リポジトリ [fummicc1/swiftcd-demo-manifests](https://github.com/fummicc1/swiftcd-demo-manifests) をHTTPSでポーリングします（認証は不要）。`guestbook` は自動Sync、`guestbook-staging` は手動Sync（UIのSyncボタンかCLIで同期）の例です。
+
+`repoURL` にはローカルのパスも書けます。GitHubを使わずに試す場合は `./scripts/init-demo-repo.sh` で `~/.swiftcd/demo-repo` を作り、`repoURL: ~/.swiftcd/demo-repo` にしてください（E2Eもこの方法でローカルリポジトリを使います）。
 
 サーバーのオプションは `swift run swiftcd-server --help` で確認できます（`--interval`、`--port`、`--context`、`--work-dir`）。
 

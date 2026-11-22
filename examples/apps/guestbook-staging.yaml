@@ -1,6 +1,6 @@
 name: guestbook-staging
 source:
-  repoURL: ~/.swiftcd/demo-repo
+  repoURL: https://github.com/fummicc1/swiftcd-demo-manifests.git
   path: guestbook
   targetRevision: main
 destination:
