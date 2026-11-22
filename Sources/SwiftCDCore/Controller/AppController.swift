@@ -53,10 +53,10 @@ public actor AppController {
         return status
     }
 
-    /// 手動Sync。
+    /// 手動Sync。`prune` がfalseでも、Applicationの `syncPolicy.prune` が有効ならpruneする。
     @discardableResult
-    public func sync() async -> AppStatus {
-        await enqueue { await self.performSync() }
+    public func sync(prune: Bool = false) async -> AppStatus {
+        await enqueue { await self.performSync(prune: prune || self.app.syncPolicy.prune) }
         return status
     }
 
@@ -94,7 +94,7 @@ public actor AppController {
             // 手動の変更（ドリフト）はOutOfSyncとして表示するだけで、戻さない（self-healは未対応）。
             if allowAutoSync, app.syncPolicy.automated, status.sync == .outOfSync,
                status.lastSyncedRevision != revision.sha {
-                try await apply(revision: revision, manifests: manifests)
+                try await apply(revision: revision, manifests: manifests, prune: app.syncPolicy.prune)
             }
         } catch {
             status.error = "\(error)"
@@ -103,22 +103,28 @@ public actor AppController {
         }
     }
 
-    private func performSync() async {
+    private func performSync(prune: Bool) async {
         status.phase = .syncing
         defer { status.phase = .idle }
         do {
             let (revision, manifests) = try await fetchAndRender()
-            try await apply(revision: revision, manifests: manifests)
+            try await apply(revision: revision, manifests: manifests, prune: prune)
         } catch {
             status.error = "\(error)"
             status.lastReconciledAt = now()
         }
     }
 
-    private func apply(revision: GitRevision, manifests: RenderedManifests) async throws {
+    private func apply(revision: GitRevision, manifests: RenderedManifests, prune: Bool) async throws {
         status.phase = .syncing
-        try await cluster.ensureNamespace(app.destination.namespace)
-        _ = try await cluster.apply(manifests, namespace: app.destination.namespace)
+        let namespace = app.destination.namespace
+        try await cluster.ensureNamespace(namespace)
+        _ = try await cluster.apply(manifests, namespace: namespace)
+        if prune {
+            let managed = try await cluster.managedObjects(appName: app.name, namespace: namespace)
+            let orphans = PrunePlanner.orphans(desired: manifests.resources, managed: managed)
+            _ = try await cluster.delete(orphans, namespace: namespace)
+        }
         status.lastSyncedAt = now()
         status.lastSyncedRevision = revision.sha
         try await compare(revision: revision, manifests: manifests)
@@ -128,13 +134,17 @@ public actor AppController {
         let namespace = app.destination.namespace
         let diff: DiffResult
         let live: [LiveObject]
+        let orphans: [LiveObject]
         if try await cluster.namespaceExists(namespace) {
             diff = try await cluster.diff(manifests, namespace: namespace)
             live = try await cluster.liveObjects(manifests, namespace: namespace)
+            let managed = try await cluster.managedObjects(appName: app.name, namespace: namespace)
+            orphans = PrunePlanner.orphans(desired: manifests.resources, managed: managed)
         } else {
             // namespaceが無いとサーバーサイドのdiffが失敗するので、全リソース未作成として扱う。
             diff = DiffResult(outOfSync: Set(manifests.resources), hasDiff: !manifests.resources.isEmpty)
             live = []
+            orphans = []
         }
 
         let liveByRef = Dictionary(live.map { ($0.ref, $0) }, uniquingKeysWith: { first, _ in first })
@@ -144,10 +154,17 @@ public actor AppController {
             return ResourceStatus(ref: ref, sync: sync, health: health.status, message: health.message)
         }
 
+        let pruneTargets = orphans.map { object in
+            ResourceStatus(
+                ref: object.ref, sync: .outOfSync, health: HealthAssessor.assess(object).status,
+                message: "requires pruning", requiresPruning: true)
+        }
+
         status.revision = revision.sha
         status.revisionMessage = revision.message
-        status.resources = resources
-        status.sync = diff.hasDiff || resources.contains { $0.sync == .outOfSync } ? .outOfSync : .synced
+        status.resources = resources + pruneTargets
+        status.sync = diff.hasDiff || status.resources.contains { $0.sync == .outOfSync } ? .outOfSync : .synced
+        // ヘルスはGitにあるリソースだけで判断する。消す予定のリソースの状態でアプリ全体を悪く見せない。
         status.health = HealthAssessor.aggregate(resources.map(\.health))
         status.error = nil
         status.lastReconciledAt = now()

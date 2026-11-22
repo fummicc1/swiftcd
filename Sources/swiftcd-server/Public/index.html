@@ -70,12 +70,14 @@ function render(apps) {
         ${badge(a.sync)} ${badge(a.health)} ${a.phase !== "Idle" ? badge(a.phase) : ""}
         <button data-action="refresh" data-name="${esc(a.name)}" ${busy.has(a.name) ? "disabled" : ""}>Refresh</button>
         <button data-action="sync" data-name="${esc(a.name)}" ${busy.has(a.name) ? "disabled" : ""}>Sync</button>
+        ${a.resources.some((r) => r.requiresPruning) && !a.prune ? `<button data-action="sync?prune=true" data-name="${esc(a.name)}" ${busy.has(a.name) ? "disabled" : ""}>Sync + Prune</button>` : ""}
       </div>
       <dl>
         <dt>Repo</dt><dd><code>${esc(a.source.repoURL)}</code> / <code>${esc(a.source.path)}</code> @ <code>${esc(a.source.targetRevision)}</code></dd>
         <dt>Revision</dt><dd><code>${esc((a.revision ?? "-").slice(0, 7))}</code> ${esc(a.revisionMessage ?? "")}</dd>
         <dt>Namespace</dt><dd>${esc(a.destination.namespace)}</dd>
         <dt>Auto Sync</dt><dd>${a.automated ? "有効" : "無効"}</dd>
+        <dt>Prune</dt><dd>${a.prune ? "常に有効" : "手動（Sync + Prune）"}</dd>
         <dt>Last Sync</dt><dd>${time(a.lastSyncedAt)} <code>${esc((a.lastSyncedRevision ?? "").slice(0, 7))}</code></dd>
         <dt>Reconciled</dt><dd>${time(a.lastReconciledAt)}</dd>
       </dl>
@@ -88,7 +90,7 @@ function render(apps) {
               <tr>
                 <td>${esc(r.ref.group ? r.ref.group + "/" : "")}${esc(r.ref.kind)}</td>
                 <td>${esc(r.ref.name)}</td>
-                <td>${badge(r.sync)}</td>
+                <td>${badge(r.sync)} ${r.requiresPruning ? '<span class="badge Degraded">Prune</span>' : ""}</td>
                 <td>${badge(r.health)}</td>
                 <td class="msg">${esc(r.message ?? "")}</td>
               </tr>`).join("")}

@@ -49,8 +49,8 @@ public actor AppStore {
         try await controller(name).status
     }
 
-    public func sync(_ name: String) async throws -> AppStatus {
-        try await controller(name).sync()
+    public func sync(_ name: String, prune: Bool = false) async throws -> AppStatus {
+        try await controller(name).sync(prune: prune)
     }
 
     public func refresh(_ name: String) async throws -> AppStatus {

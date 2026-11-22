@@ -21,9 +21,10 @@ enum Routes {
             let name = try context.parameters.require("name")
             return try await handle { try await store.get(name) }
         }
-        api.post(":name/sync") { _, context in
+        api.post(":name/sync") { request, context in
             let name = try context.parameters.require("name")
-            return try await handle { try await store.sync(name) }
+            let prune = request.uri.queryParameters["prune"] == "true"
+            return try await handle { try await store.sync(name, prune: prune) }
         }
         api.post(":name/refresh") { _, context in
             let name = try context.parameters.require("name")

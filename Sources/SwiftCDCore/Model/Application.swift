@@ -31,9 +31,18 @@ public struct Application: Codable, Sendable, Equatable {
 
     public struct SyncPolicy: Codable, Sendable, Equatable {
         public var automated: Bool
+        /// Gitから消えたリソースを、Syncのたびにクラスタからも削除する。
+        public var prune: Bool
 
-        public init(automated: Bool = false) {
+        public init(automated: Bool = false, prune: Bool = false) {
             self.automated = automated
+            self.prune = prune
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            automated = try container.decodeIfPresent(Bool.self, forKey: .automated) ?? false
+            prune = try container.decodeIfPresent(Bool.self, forKey: .prune) ?? false
         }
     }
 
@@ -110,12 +119,15 @@ public struct ResourceStatus: Codable, Sendable, Equatable {
     public var sync: SyncStatus
     public var health: HealthStatus
     public var message: String?
+    /// Gitにはもう無いが、クラスタに残っている管理対象リソース。
+    public var requiresPruning: Bool
 
-    public init(ref: ResourceRef, sync: SyncStatus, health: HealthStatus, message: String? = nil) {
+    public init(ref: ResourceRef, sync: SyncStatus, health: HealthStatus, message: String? = nil, requiresPruning: Bool = false) {
         self.ref = ref
         self.sync = sync
         self.health = health
         self.message = message
+        self.requiresPruning = requiresPruning
     }
 }
 
@@ -130,6 +142,7 @@ public struct AppStatus: Codable, Sendable, Equatable {
     public var source: Application.Source
     public var destination: Application.Destination
     public var automated: Bool
+    public var prune: Bool
     public var phase: OperationPhase
     public var sync: SyncStatus
     public var health: HealthStatus
@@ -146,6 +159,7 @@ public struct AppStatus: Codable, Sendable, Equatable {
         source = app.source
         destination = app.destination
         automated = app.syncPolicy.automated
+        prune = app.syncPolicy.prune
         phase = .idle
         sync = .unknown
         health = .unknown

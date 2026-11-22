@@ -27,6 +27,9 @@ public protocol ClusterClient: Sendable {
     func diff(_ manifests: RenderedManifests, namespace: String) async throws -> DiffResult
     func apply(_ manifests: RenderedManifests, namespace: String) async throws -> String
     func liveObjects(_ manifests: RenderedManifests, namespace: String) async throws -> [LiveObject]
+    /// namespace内で `swiftcd.io/app=<appName>` ラベルが付いた全リソース
+    func managedObjects(appName: String, namespace: String) async throws -> [LiveObject]
+    func delete(_ objects: [LiveObject], namespace: String) async throws -> String
 }
 
 public struct KubectlClient: ClusterClient {
@@ -60,6 +63,10 @@ public struct KubectlClient: ClusterClient {
     }
 
     public func diff(_ manifests: RenderedManifests, namespace: String) async throws -> DiffResult {
+        // 空のListを渡すとkubectlは "no objects passed" で失敗する。全部Gitから消した場合もpruneできるようにする。
+        guard !manifests.resources.isEmpty else {
+            return DiffResult(outOfSync: [], hasDiff: false)
+        }
         let args = kubectl([
             "diff", "--server-side", "--force-conflicts", "--field-manager=\(Self.fieldManager)",
             "-n", namespace, "-f", manifests.file.path,
@@ -94,6 +101,9 @@ public struct KubectlClient: ClusterClient {
     }
 
     public func apply(_ manifests: RenderedManifests, namespace: String) async throws -> String {
+        guard !manifests.resources.isEmpty else {
+            return ""
+        }
         let result = try await runner.runChecked(kubectl([
             "apply", "--server-side", "--force-conflicts", "--field-manager=\(Self.fieldManager)",
             "-n", namespace, "-f", manifests.file.path,
@@ -113,6 +123,54 @@ public struct KubectlClient: ClusterClient {
             return []
         }
         return try Self.parseLiveObjects(Data(text.utf8))
+    }
+
+    /// ラベルがコピーされるだけの種類。取得しても除外するので、最初から問い合わせない。
+    static let skippedResourceTypes: Set<String> = [
+        "endpoints", "endpointslices.discovery.k8s.io", "events", "events.events.k8s.io",
+    ]
+
+    public func managedObjects(appName: String, namespace: String) async throws -> [LiveObject] {
+        let types = try await runner.runChecked(kubectl([
+            "api-resources", "--verbs=list,delete", "--namespaced=true", "-o", "name",
+        ])).stdout
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { !Self.skippedResourceTypes.contains($0) }
+        guard !types.isEmpty else {
+            return []
+        }
+        let result = try await runner.runChecked(kubectl([
+            "get", types.joined(separator: ","), "-n", namespace,
+            "-l", "\(ManifestRenderer.appLabel)=\(appName)", "-o", "json",
+        ]))
+        return try Self.parseLiveObjects(Data(result.stdout.utf8))
+    }
+
+    public func delete(_ objects: [LiveObject], namespace: String) async throws -> String {
+        guard !objects.isEmpty else {
+            return ""
+        }
+        // ライブのオブジェクトをそのまま渡すと余計なフィールドまで含むので、特定に必要な項目だけに絞る。
+        let items: [[String: Any]] = objects.compactMap { object in
+            guard let json = try? JSONSerialization.jsonObject(with: object.json) as? [String: Any],
+                  let metadata = json["metadata"] as? [String: Any] else {
+                return nil
+            }
+            return [
+                "apiVersion": json["apiVersion"] ?? "",
+                "kind": json["kind"] ?? "",
+                "metadata": ["name": metadata["name"] ?? "", "namespace": namespace],
+            ]
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("swiftcd-prune-\(UUID().uuidString).json")
+        try JSONSerialization.data(withJSONObject: ["apiVersion": "v1", "kind": "List", "items": items]).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let result = try await runner.runChecked(kubectl([
+            "delete", "-n", namespace, "-f", file.path, "--ignore-not-found",
+        ]))
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func parseLiveObjects(_ data: Data) throws -> [LiveObject] {

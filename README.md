@@ -28,6 +28,17 @@ AppStore ── HTTP API (Hummingbird) ── Web UI / swiftcd CLI
 | Health Status | `HealthAssessor`（Deployment / StatefulSet / ReplicaSet / Pod） |
 | 管理対象の識別 | ラベル `swiftcd.io/app=<name>` |
 
+### Prune
+
+Gitからマニフェストを消したリソースは、Refreshで「Prune が必要」と表示され、アプリはOutOfSyncになります。SwiftCDは、namespace内で `swiftcd.io/app=<name>` ラベルが付いているのにGitに無いリソースを、prune対象として探します。ただし `ownerReferences` を持つもの（Deploymentが作ったReplicaSetなど）と、Serviceのラベルがコピーされる Endpoints / EndpointSlice は対象にしません。
+
+既定では削除しません。削除するのは次のどちらかのときだけです。
+
+- 手動Syncでpruneを指定したとき（`swiftcd app sync <name> --prune`、UIの「Sync + Prune」ボタン、`POST /api/apps/:name/sync?prune=true`）
+- Application定義に `syncPolicy.prune: true` を書いたとき（自動Syncでも削除します）
+
+### 自動Sync
+
 自動Syncは、ArgoCDと同じく「まだSyncしていないリビジョン」だけが対象です。`kubectl scale` などの手動変更はOutOfSyncと表示しますが、元には戻しません（self-healは未対応）。
 
 ## 必要なもの
@@ -81,6 +92,7 @@ swift test          # 単体テスト（Fakeを使うのでクラスタは不要
 
 ## 未対応（今後の候補）
 
-- self-heal、prune（Gitから消えたリソースの削除。`swiftcd.io/app` ラベルで対象を探せる）
+- self-heal
+- namespaceを持たないリソース（ClusterRoleなど）のprune
 - Git webhook、Kustomize / Helm のレンダリング
 - kubectlを使わないREST版の `ClusterClient`、Application CRD化

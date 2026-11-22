@@ -44,7 +44,7 @@ struct AppCommand: AsyncParsableCommand {
             let apps = try APICoding.decoder.decode([AppStatus].self, from: await options.request("GET", "/api/apps"))
             let rows = apps.map { app in
                 [app.name, app.sync.rawValue, app.health.rawValue, String((app.revision ?? "-").prefix(7)),
-                 app.destination.namespace, app.automated ? "auto" : "manual"]
+                 app.destination.namespace, (app.automated ? "auto" : "manual") + (app.prune ? "+prune" : "")]
             }
             printTable(header: ["NAME", "SYNC", "HEALTH", "REVISION", "NAMESPACE", "POLICY"], rows: rows)
         }
@@ -64,9 +64,11 @@ struct AppCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Applicationを同期する")
         @OptionGroup var options: ServerOptions
         @Argument var name: String
+        @Flag(help: "Gitから消えたリソースをクラスタからも削除する")
+        var prune = false
 
         func run() async throws {
-            printDetail(try await fetch(options, "POST", "/api/apps/\(name)/sync"))
+            printDetail(try await fetch(options, "POST", "/api/apps/\(name)/sync\(prune ? "?prune=true" : "")"))
         }
     }
 
@@ -101,7 +103,10 @@ private func printDetail(_ app: AppStatus) {
     print("")
     printTable(
         header: ["KIND", "NAME", "SYNC", "HEALTH", "MESSAGE"],
-        rows: app.resources.map { [$0.ref.kind, $0.ref.name, $0.sync.rawValue, $0.health.rawValue, $0.message ?? ""] })
+        rows: app.resources.map {
+            [$0.ref.kind, $0.ref.name, $0.sync.rawValue + ($0.requiresPruning ? " (prune)" : ""),
+             $0.health.rawValue, $0.message ?? ""]
+        })
 }
 
 private func printTable(header: [String], rows: [[String]]) {

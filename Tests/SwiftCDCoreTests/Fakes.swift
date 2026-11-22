@@ -36,11 +36,15 @@ final class FakeCluster: ClusterClient, @unchecked Sendable {
     private let lock = NSLock()
     private var namespaces: Set<String> = []
     private var appliedContent: Data?
-    private var appliedRefs: [ResourceRef] = []
+    /// クラスタに存在する管理対象リソース。applyで増え、deleteでしか減らない。
+    private var existing: [ResourceRef] = []
     private var drifted: Set<ResourceRef> = []
     private(set) var applyCount = 0
+    private(set) var deletedRefs: [ResourceRef] = []
 
     var appliedCount: Int { lock.withLock { applyCount } }
+    var deleted: [ResourceRef] { lock.withLock { deletedRefs } }
+    var existingRefs: [ResourceRef] { lock.withLock { existing } }
 
     func drift(_ ref: ResourceRef) {
         lock.withLock { _ = drifted.insert(ref) }
@@ -68,7 +72,9 @@ final class FakeCluster: ClusterClient, @unchecked Sendable {
         let content = try Data(contentsOf: manifests.file)
         lock.withLock {
             appliedContent = content
-            appliedRefs = manifests.resources
+            for ref in manifests.resources where !existing.contains(ref) {
+                existing.append(ref)
+            }
             drifted = []
             applyCount += 1
         }
@@ -76,8 +82,25 @@ final class FakeCluster: ClusterClient, @unchecked Sendable {
     }
 
     func liveObjects(_ manifests: RenderedManifests, namespace: String) async throws -> [LiveObject] {
-        let refs = lock.withLock { appliedRefs }
-        return try refs.map { ref in
+        let refs = lock.withLock { existing }.filter { manifests.resources.contains($0) }
+        return try objects(refs)
+    }
+
+    func managedObjects(appName: String, namespace: String) async throws -> [LiveObject] {
+        try objects(lock.withLock { existing })
+    }
+
+    func delete(_ objects: [LiveObject], namespace: String) async throws -> String {
+        lock.withLock {
+            let refs = objects.map(\.ref)
+            existing.removeAll { refs.contains($0) }
+            deletedRefs.append(contentsOf: refs)
+        }
+        return "deleted"
+    }
+
+    private func objects(_ refs: [ResourceRef]) throws -> [LiveObject] {
+        try refs.map { ref in
             let object: [String: Any] = [
                 "kind": ref.kind,
                 "metadata": ["name": ref.name, "generation": 1],
@@ -93,6 +116,18 @@ func temporaryDirectory() throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("swiftcd-tests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
+}
+
+func serviceYAML(name: String = "web") -> String {
+    """
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: \(name)
+    spec:
+      selector: { app: \(name) }
+      ports: [{ port: 80 }]
+    """
 }
 
 func deploymentYAML(name: String = "web", replicas: Int = 1) -> String {

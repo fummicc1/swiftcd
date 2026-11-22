@@ -79,4 +79,17 @@ wait_for e2e-manual Synced Healthy
 echo "== 5. 管理ラベルが付いている"
 kc -n e2e-manual get deploy,svc -l swiftcd.io/app=e2e-manual -o name
 
+echo "== 6. GitからServiceを消すと、prune無効なら残ってOutOfSyncになる"
+git -C "$DEMO_REPO" rm --quiet guestbook/service.yaml
+git -C "$DEMO_REPO" -c user.name=e2e -c user.email=e2e@localhost commit --quiet -m "remove service"
+wait_for e2e-auto OutOfSync Healthy
+kc -n e2e-auto get svc guestbook -o name
+cli get e2e-auto | grep -q "OutOfSync (prune)" || { echo "service was not marked for pruning" >&2; exit 1; }
+
+echo "== 7. --prune付きのSyncでServiceだけが削除される"
+cli sync e2e-auto --prune >/dev/null
+wait_for e2e-auto Synced Healthy
+[ -z "$(kc -n e2e-auto get svc guestbook --ignore-not-found -o name)" ] || { echo "service was not pruned" >&2; exit 1; }
+kc -n e2e-auto get deploy guestbook -o name
+
 echo "E2E passed"
