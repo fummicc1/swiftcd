@@ -5,13 +5,16 @@ import Testing
 @Suite struct AppControllerTests {
     let deployment = ResourceRef(group: "apps", kind: "Deployment", name: "web")
 
-    private func makeController(automated: Bool, git: FakeGit, cluster: FakeCluster) throws -> AppController {
+    private func makeController(
+        automated: Bool, git: FakeGit, cluster: FakeCluster, namespace: String = "demo", workDirectory: URL? = nil
+    ) throws -> AppController {
         let app = Application(
             name: "demo",
             source: .init(repoURL: "/unused", path: "manifests"),
-            destination: .init(namespace: "demo"),
+            destination: .init(namespace: namespace),
             syncPolicy: .init(automated: automated))
-        return AppController(app: app, git: git, cluster: cluster, workDirectory: try temporaryDirectory())
+        return AppController(
+            app: app, git: git, cluster: cluster, workDirectory: try workDirectory ?? temporaryDirectory())
     }
 
     @Test func 自動Syncが有効なら初回refreshで同期される() async throws {
@@ -56,6 +59,50 @@ import Testing
         #expect(cluster.appliedCount == 1)
         #expect(status.sync == .outOfSync)
         #expect(status.resources.first?.sync == .outOfSync)
+    }
+
+    @Test func 再起動してもSync済みのリビジョンへのドリフトは自動で戻さない() async throws {
+        let git = FakeGit(files: ["manifests/deploy.yaml": deploymentYAML()])
+        let cluster = FakeCluster()
+        let workDirectory = try temporaryDirectory()
+        try await makeController(automated: true, git: git, cluster: cluster, workDirectory: workDirectory).refresh()
+
+        cluster.drift(deployment)
+        let restarted = try makeController(automated: true, git: git, cluster: cluster, workDirectory: workDirectory)
+        let status = await restarted.refresh()
+
+        #expect(cluster.appliedCount == 1)
+        #expect(status.sync == .outOfSync)
+        #expect(status.lastSyncedRevision == "aaaaaaa")
+    }
+
+    @Test func 再起動中に入ったコミットは自動Syncされる() async throws {
+        let git = FakeGit(files: ["manifests/deploy.yaml": deploymentYAML()])
+        let cluster = FakeCluster()
+        let workDirectory = try temporaryDirectory()
+        try await makeController(automated: true, git: git, cluster: cluster, workDirectory: workDirectory).refresh()
+
+        git.commit(files: ["manifests/deploy.yaml": deploymentYAML(replicas: 3)], sha: "bbbbbbb")
+        let restarted = try makeController(automated: true, git: git, cluster: cluster, workDirectory: workDirectory)
+        let status = await restarted.refresh()
+
+        #expect(cluster.appliedCount == 2)
+        #expect(status.lastSyncedRevision == "bbbbbbb")
+    }
+
+    @Test func Application定義が変わっていたら保存したSync済みリビジョンは使わない() async throws {
+        let git = FakeGit(files: ["manifests/deploy.yaml": deploymentYAML()])
+        let cluster = FakeCluster()
+        let workDirectory = try temporaryDirectory()
+        try await makeController(automated: true, git: git, cluster: cluster, workDirectory: workDirectory).refresh()
+
+        cluster.drift(deployment)
+        let restarted = try makeController(
+            automated: true, git: git, cluster: cluster, namespace: "other", workDirectory: workDirectory)
+        let status = await restarted.refresh()
+
+        #expect(cluster.appliedCount == 2)
+        #expect(status.sync == .synced)
     }
 
     @Test func 手動Syncのアプリはsyncを呼ぶまで同期しない() async throws {

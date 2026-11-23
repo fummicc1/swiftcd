@@ -28,6 +28,8 @@ AppStore ── HTTP API (Hummingbird) ── Web UI / swiftcd CLI
 | Health Status | `HealthAssessor`（Deployment / StatefulSet / ReplicaSet / Pod） |
 | 管理対象の識別 | ラベル `swiftcd.io/app=<name>` |
 
+ソースのディレクトリ構成は [docs/directory-structure.md](docs/directory-structure.md) にまとめています。
+
 ### Prune
 
 Gitからマニフェストを消したリソースは、Refreshで「Prune が必要」と表示され、アプリはOutOfSyncになります。SwiftCDは、namespace内で `swiftcd.io/app=<name>` ラベルが付いているのにGitに無いリソースを、prune対象として探します。ただし `ownerReferences` を持つもの（Deploymentが作ったReplicaSetなど）と、Serviceのラベルがコピーされる Endpoints / EndpointSlice は対象にしません。
