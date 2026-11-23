@@ -32,6 +32,28 @@ import Testing
     }
 }
 
+@Suite struct ProcessRunnerTests {
+    @Test func 制限時間内に終わったコマンドは結果を返す() async throws {
+        let result = try await ProcessRunner(timeout: .seconds(5)).run(["echo", "hello"], in: nil)
+
+        #expect(result.exitCode == 0)
+        #expect(result.stdout == "hello\n")
+    }
+
+    @Test func 制限時間を超えたコマンドは打ち切ってエラーにする() async throws {
+        let runner = ProcessRunner(timeout: .milliseconds(200))
+        let clock = ContinuousClock()
+
+        let elapsed = await clock.measure {
+            await #expect(throws: CommandTimeoutError.self) {
+                try await runner.run(["sleep", "10"], in: nil)
+            }
+        }
+
+        #expect(elapsed < .seconds(5))
+    }
+}
+
 @Suite struct CLIGitClientTests {
     private let runner = ProcessRunner()
 

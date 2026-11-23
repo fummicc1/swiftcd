@@ -38,12 +38,30 @@ extension CommandRunner {
     }
 }
 
+public struct CommandTimeoutError: Error, CustomStringConvertible, Sendable {
+    public var command: [String]
+    public var timeout: Duration
+
+    public var description: String {
+        "`\(command.joined(separator: " "))` timed out after \(timeout)"
+    }
+}
+
 /// `/usr/bin/env` 経由で実行し、PATH上の git や kubectl を解決する。
 public struct ProcessRunner: CommandRunner {
-    public init() {}
+    private static let killGracePeriod: Duration = .seconds(2)
+
+    /// 固まったコマンドがアプリの操作キューを止め続けないよう、これを超えたら打ち切る。
+    public let timeout: Duration
+
+    public init(timeout: Duration = .seconds(120)) {
+        self.timeout = timeout
+    }
 
     public func run(_ arguments: [String], in directory: URL?) async throws -> CommandResult {
-        try await withCheckedThrowingContinuation { continuation in
+        let timeout = self.timeout
+        return try await withCheckedThrowingContinuation { continuation in
+            let resumer = ResumeOnce(continuation)
             DispatchQueue.global().async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -59,9 +77,22 @@ public struct ProcessRunner: CommandRunner {
                 do {
                     try process.run()
                 } catch {
-                    continuation.resume(throwing: error)
+                    resumer.resume(throwing: error)
                     return
                 }
+
+                // 子プロセスがパイプを開いたまま残ると読み取りが終わらないので、終了を待たずに呼び出し元へ返す。
+                let deadline = DispatchWorkItem {
+                    guard process.isRunning else { return }
+                    process.terminate()
+                    resumer.resume(throwing: CommandTimeoutError(command: arguments, timeout: timeout))
+                    DispatchQueue.global().asyncAfter(deadline: .now() + Self.killGracePeriod.timeInterval) {
+                        if process.isRunning {
+                            kill(process.processIdentifier, SIGKILL)
+                        }
+                    }
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout.timeInterval, execute: deadline)
 
                 // 片方のパイプが詰まるとデッドロックするため、stderrは別スレッドで読む。
                 let stderrBox = DataBox()
@@ -74,8 +105,9 @@ public struct ProcessRunner: CommandRunner {
                 let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
                 group.wait()
                 process.waitUntilExit()
+                deadline.cancel()
 
-                continuation.resume(returning: CommandResult(
+                resumer.resume(returning: CommandResult(
                     exitCode: process.terminationStatus,
                     stdout: String(decoding: stdoutData, as: UTF8.self),
                     stderr: String(decoding: stderrBox.data, as: UTF8.self)
@@ -87,4 +119,36 @@ public struct ProcessRunner: CommandRunner {
 
 private final class DataBox: @unchecked Sendable {
     var data = Data()
+}
+
+/// タイムアウトと通常終了のどちらが先でも、continuationを1回だけ再開する。
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<CommandResult, Error>?
+
+    init(_ continuation: CheckedContinuation<CommandResult, Error>) {
+        self.continuation = continuation
+    }
+
+    func resume(returning result: CommandResult) {
+        take()?.resume(returning: result)
+    }
+
+    func resume(throwing error: Error) {
+        take()?.resume(throwing: error)
+    }
+
+    private func take() -> CheckedContinuation<CommandResult, Error>? {
+        lock.withLock {
+            defer { continuation = nil }
+            return continuation
+        }
+    }
+}
+
+private extension Duration {
+    var timeInterval: TimeInterval {
+        let (seconds, attoseconds) = components
+        return Double(seconds) + Double(attoseconds) / 1e18
+    }
 }

@@ -21,6 +21,9 @@ struct SwiftCDServer: AsyncParsableCommand {
     @Option(help: "reconcile間隔（秒）")
     var interval: Int = 30
 
+    @Option(help: "git・kubectlの1コマンドあたりのタイムアウト（秒）")
+    var commandTimeout: Int = 120
+
     @Option(help: "clone先などの作業ディレクトリ")
     var workDir: String = "~/.swiftcd"
 
@@ -33,10 +36,11 @@ struct SwiftCDServer: AsyncParsableCommand {
         let applications = try ApplicationLoader.load(from: appsURL)
         print("loaded \(applications.count) application(s) from \(appsURL.path): \(applications.map(\.name).joined(separator: ", "))")
 
+        let runner = ProcessRunner(timeout: .seconds(commandTimeout))
         let store = AppStore(
             apps: applications,
-            git: CLIGitClient(),
-            cluster: KubectlClient(context: context),
+            git: CLIGitClient(runner: runner),
+            cluster: KubectlClient(runner: runner, context: context),
             workDirectory: URL(fileURLWithPath: NSString(string: workDir).expandingTildeInPath),
             interval: .seconds(interval))
         await store.startAll()
