@@ -72,7 +72,7 @@ git commit -am "scale to 3" && git push
 
 `repoURL` にはローカルのパスも書けます。GitHubを使わずに試す場合は `./scripts/init-demo-repo.sh` で `~/.swiftcd/demo-repo` を作り、`repoURL: ~/.swiftcd/demo-repo` にしてください（E2Eもこの方法でローカルリポジトリを使います）。
 
-サーバーのオプションは `swift run swiftcd-server --help` で確認できます（`--interval`、`--port`、`--context`、`--work-dir`）。
+サーバーのオプションは `swift run swiftcd-server --help` で確認できます（`--interval`、`--port`、`--context`、`--work-dir`、`--command-timeout`）。
 
 ## テスト
 
