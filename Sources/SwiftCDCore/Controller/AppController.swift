@@ -28,7 +28,12 @@ public actor AppController {
         self.workDirectory = workDirectory
         self.interval = interval
         self.now = now
-        self.status = AppStatus(app: app)
+        var status = AppStatus(app: app)
+        if let state = SyncState.load(from: Self.stateFile(in: workDirectory)), state.app == app {
+            status.lastSyncedRevision = state.lastSyncedRevision
+            status.lastSyncedAt = state.lastSyncedAt
+        }
+        self.status = status
     }
 
     public func start() {
@@ -72,6 +77,10 @@ public actor AppController {
 
     private var repoDirectory: URL { workDirectory.appendingPathComponent("repo") }
     private var renderedFile: URL { workDirectory.appendingPathComponent("rendered.json") }
+
+    private static func stateFile(in workDirectory: URL) -> URL {
+        workDirectory.appendingPathComponent("state.json")
+    }
 
     private func fetchAndRender() async throws -> (GitRevision, RenderedManifests) {
         let revision = try await git.checkout(
@@ -125,9 +134,12 @@ public actor AppController {
             let orphans = PrunePlanner.orphans(desired: manifests.resources, managed: managed)
             _ = try await cluster.delete(orphans, namespace: namespace)
         }
-        status.lastSyncedAt = now()
+        let syncedAt = now()
+        status.lastSyncedAt = syncedAt
         status.lastSyncedRevision = revision.sha
         try await compare(revision: revision, manifests: manifests)
+        try SyncState(app: app, lastSyncedRevision: revision.sha, lastSyncedAt: syncedAt)
+            .save(to: Self.stateFile(in: workDirectory))
     }
 
     private func compare(revision: GitRevision, manifests: RenderedManifests) async throws {
